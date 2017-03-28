@@ -1,12 +1,10 @@
+note: still python 3.5 and TF 1.0
+-----------------------------------------------------------------------------------------
 
+to run:
+$ python main.py
 
-
-
-main source for params
-https://github.com/adeshpande3/Generative-Adversarial-Networks/blob/master/Generative%20Adversarial%20Networks%20Tutorial.ipynb
- For this, we’ll be basing our model off the generator introduced in the DCGAN paper (link: https://arxiv.org/pdf/1511.06434v2.pdf).
- so it is aware of dcgan
-
+-----------------------------------------------------------------------------------------
 
 1. what is generative modelling
 2. what is probability modelling

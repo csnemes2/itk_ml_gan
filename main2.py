@@ -6,57 +6,84 @@ from print_functions import *
 from tf_wrappers import *
 
 
+mnist = input_data.read_data_sets("MNIST_data/")
+
+
 def discriminator(x_image, reuse=False):
-    """
-    A Generator inspired by InfoGAN's generator: https://github.com/openai/InfoGAN/blob/master/infogan/models/regularized_gan.py
-    """
     with tf.variable_scope("d_"):
         if reuse:
             tf.get_variable_scope().reuse_variables()
 
         with tf.variable_scope("conv1"):
-            ret = conv_stride2_leaky(x_image, [4, 4, 1, 64], [64])
+            ret = conv_relu_pool(x_image, [5, 5, 1, 8], [8])
 
         with tf.variable_scope("conv2"):
-            ret2 = conv_stride2_norm_leaky(ret, [4, 4, 64, 128], [128])
+            ret2 = conv_relu_pool(ret, [5, 5, 8, 16], [16])
 
-        ret3 = tf.reshape(ret2, [-1, 7 * 7 * 128])
+        ret3 = tf.reshape(ret2, [-1, 7 * 7 * 16])
 
         with tf.variable_scope("fully1"):
-            ret4 = fully_batch_leaky(ret3, [7 * 7 * 128, 1024], [1024])
+            ret4 = fully_relu(ret3, [7 * 7 * 16, 32], [32])
 
         with tf.variable_scope("fully2"):
-            ret5 = fully(ret4, [1024, 1], [1])
+            ret5 = fully(ret4, [32, 1], [1])
 
         return ret5
 
-
-def generator(z, batch_size, reuse=False, img_size=28):
-    """
-    A Generator inspired by InfoGAN's generator: https://github.com/openai/InfoGAN/blob/master/infogan/models/regularized_gan.py
-    """
-
+def generator(z, batch_size, reuse=False):
     with tf.variable_scope("g_"):
         if reuse:
             tf.get_variable_scope().reuse_variables()
 
-        with tf.variable_scope("fully1"):
-            a0 = fully_batch_relu(z, [100, 1024], [1024])
+        g_dim = 64  # Number of filters of first layer of generator
+        c_dim = 1  # Color dimension of output (MNIST is grayscale, so c_dim = 1 for us)
 
-        s1 = int(img_size / 4)
-        with tf.variable_scope("fully2"):
-            a1 = fully_batch_relu(a0, [1024, s1 * s1 * 128], [s1 * s1 * 128])
+        # Dimensions of 1. deconv matrix = batch_size x 3 x 3 x 256
+        # Dimensions of 2. deconv matrix = batch_size x 6 x 6 x 128
+        # Dimensions of 3. deconv matrix = batch_size x 12 x 12 x 64
+        # Dimensions of 4. deconv matrix = batch_size x 28 x 28 x 1
+        s1, g1 = 4, g_dim * 4
+        s2, g2 = 7, g_dim * 2
+        s3, g3 = 13, g_dim * 1
+        s4, g4 = 28, c_dim
 
-        a1r = tf.reshape(a1, [batch_size, s1, s1, 128])
+        # assert z size = 100 = 2*2*25
+        a0 = tf.reshape(z, [batch_size, 2, 2, 25])
+        a0 = tf.nn.relu(a0)
 
-        s2 = int(img_size / 2)
+        with tf.variable_scope("deconv1"):
+            a1 = deconv_batch_relu(a0, [batch_size, s1, s1, g1], 'SAME')
+
         with tf.variable_scope("deconv2"):
-            a2 = deconv_batch_relu(a1r, [batch_size, s2, s2, 64], 'SAME')
+            a2 = deconv_batch_relu(a1, [batch_size, s2, s2, g2], 'SAME')
 
         with tf.variable_scope("deconv3"):
-            a3 = deconv_sigmoid(a2, [batch_size, img_size, img_size, 1], 'SAME')
+            a3 = deconv_batch_relu(a2, [batch_size, s3, s3, g3], 'SAME')
 
-    return a3
+        with tf.variable_scope("deconv4"):
+            a4 = deconv_tanh(a3, [batch_size, s4, s4, g4], 'VALID')
+
+    return a4
+
+def generator_v3(z, batch_size, reuse=False):
+    with tf.variable_scope("g_"):
+        if reuse:
+            tf.get_variable_scope().reuse_variables()
+
+        s1 = 14
+        s1_ch = 16
+        with tf.variable_scope("fully1"):
+            s0 = s1 * s1 * s1_ch
+            a0 = fully_batch_relu(z, [100, s0], [s0])
+
+        a1r_temp = tf.reshape(a0, [batch_size, s1, s1, s1_ch])
+        a1r = tf.nn.relu(a1r_temp)
+
+        s2 = 28
+        with tf.variable_scope("deconv1"):
+            a2 = deconv_sigmoid(a1r, [batch_size, s2, s2, 1], 'SAME')
+
+    return a2
 
 
 def noise_generator(batch_size, noise_dim):
@@ -65,7 +92,6 @@ def noise_generator(batch_size, noise_dim):
         ret.append(tf.cast(tf.random_uniform([batch_size, 1], minval=-1., maxval=1.), tf.float32))
     return tf.concat(ret, 1)
 
-mnist = input_data.read_data_sets("MNIST_data/")
 
 noise_dim = 100
 batch_size = 128
@@ -78,6 +104,7 @@ with tf.variable_scope("noise"):
 # placeholder.shape[0] = batch size, None means arbitrary
 ph_x = tf.placeholder("float", shape=[None, 28, 28, 1])
 ph_z = tf.placeholder("float", shape=[None, noise_dim])
+
 noise = noise_generator(batch_size, noise_dim)
 
 # generator
@@ -90,53 +117,23 @@ real_d = discriminator(ph_x, reuse=True)
 # display
 fake_x_disp = generator(ph_z, batch_size, reuse=True)
 
-#
-# GAN theory:
-#
-#  Main:
-#       \min_g \max_d \sum_i log(d(x_i)) + log(1-d(g(z_i)))
-#
-#  That is:
-#       \min_g \sum_i log(1-d(g(z_i)))
-#       \max_d \sum_i log(d(x_i)) + log(1-d(g(z_i)))
-#
-#
-#  Losses - Using tf.nn.sigmoid_cross_entropy_with_logits():
-#
-#   tf.nn.sigmoid_cross_entropy_with_logits(_sentinel=None, labels=None, logits=None, name=None)
-#       https://github.com/tensorflow/tensorflow/blob/master/tensorflow/g3doc/api_docs/python/functions_and_classes/shard5/tf.nn.sigmoid_cross_entropy_with_logits.md
-#       x = logits, z = labels
-#       z * -log(sigmoid(x)) + (1 - z) * -log(1 - sigmoid(x))
-#
-#   tf.zeros_like = 'zeros' out the vector
-#   tf.ones_like = 'ones' out the vector
-#
-#  Generator part:
-#
-#       \min_g  \sum_i log(1-d(g(z_i))) we want d(g(z)) to be 1, that is, to fool the discriminator
-#       \max_g  \sum_i log(d(g(z_i)))
-#       \min_g  \sum_i -log(d(g(z_i)))
-#       g_loss= \sum_i -log(d(g(z_i)))
-#       @note: this transormation is true in the "argmax" sense, check the attached excel: gan_generator_loss.xlsx/pdf
-#
-#  Discriminator part:
-#
-#       \max_d \sum_i log(d(x_i)) + log(1-d(g(z_i)))
-#       d_loss:= \sum_i -log(d(x_i)) -log(1-d(g(z_i)))
-#       @note: log() function is monoton
-#       \min_d d_loss
-#
-#
 g_loss_op = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=fake_d, labels=tf.ones_like(fake_d)))
 d_loss_real_op = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=real_d, labels=tf.ones_like(real_d)))
 d_loss_fake_op = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=fake_d, labels=tf.zeros_like(fake_d)))
 d_loss_op = d_loss_real_op + d_loss_fake_op
 
 
+# optimizer
 tvars = tf.trainable_variables()
 
 d_vars = [var for var in tvars if 'd_' in var.name]
 g_vars = [var for var in tvars if 'g_' in var.name]
+
+for i in d_vars:
+    print(i.name)
+print("-----------")
+for i in g_vars:
+    print(i.name)
 
 d_trainer_op = tf.train.AdamOptimizer(learning_rate=2e-4, beta1=0.5).minimize(d_loss_op, var_list=d_vars)
 g_trainer_op = tf.train.AdamOptimizer(learning_rate=1e-3, beta1=0.5).minimize(g_loss_op, var_list=g_vars)
